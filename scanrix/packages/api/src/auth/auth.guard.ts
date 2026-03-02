@@ -11,6 +11,7 @@ export interface AuthUser {
   email: string;
   orgId: string;
   plan: string;
+  role: string;
 }
 
 @Injectable()
@@ -35,10 +36,10 @@ export class AuthGuard implements CanActivate {
       throw new UnauthorizedException('Invalid or expired token');
     }
 
-    // Fetch org context
+    // Fetch org context + user role
     const { data: profile } = await this.supabase
       .from('user_profiles')
-      .select('org_id, orgs(plan)')
+      .select('org_id, role, orgs(plan)')
       .eq('id', data.user.id)
       .single();
 
@@ -51,6 +52,7 @@ export class AuthGuard implements CanActivate {
       email: data.user.email!,
       orgId: profile.org_id,
       plan: (profile as any).orgs?.plan ?? 'free',
+      role: (profile as any).role ?? 'member',
     } satisfies AuthUser;
 
     return true;

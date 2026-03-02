@@ -3,6 +3,7 @@ import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
+import { GlobalExceptionFilter } from './common/exception.filter';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestFastifyApplication>(
@@ -10,7 +11,17 @@ async function bootstrap() {
     new FastifyAdapter({ logger: true }),
   );
 
-  app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
+  // Raw body support required by Stripe webhook signature validation
+  await app.register(
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    require('@fastify/raw-body'),
+    { global: false, encoding: 'utf8', runFirst: true },
+  );
+
+  app.useGlobalPipes(
+    new ValidationPipe({ whitelist: true, transform: true, forbidNonWhitelisted: true }),
+  );
+  app.useGlobalFilters(new GlobalExceptionFilter());
 
   const config = new DocumentBuilder()
     .setTitle('Scanrix API')
@@ -18,8 +29,7 @@ async function bootstrap() {
     .setVersion('0.1.0')
     .addBearerAuth()
     .build();
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('docs', app, document);
+  SwaggerModule.setup('docs', app, SwaggerModule.createDocument(app, config));
 
   app.enableCors({ origin: process.env.FRONTEND_URL || 'http://localhost:3000' });
 

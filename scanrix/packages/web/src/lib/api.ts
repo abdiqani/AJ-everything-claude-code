@@ -42,4 +42,11 @@ export const api = {
     verify: (token: string, id: string) =>
       apiFetch(`/domains/${id}/verify`, token, { method: 'POST' }),
   },
+  billing: {
+    checkout: (token: string, plan: string) =>
+      apiFetch('/billing/checkout', token, {
+        method: 'POST',
+        body: JSON.stringify({ plan }),
+      }),
+  },
 };

@@ -5,6 +5,8 @@ import { Pool } from 'pg';
 import { DATABASE_POOL } from '../common/database.module';
 import { DomainsService } from '../domains/domains.service';
 import { PlansService } from '../plans/plans.service';
+import { AuditService } from '../common/audit.service';
+import { AnalyticsService } from '../common/analytics.service';
 import { SsrfGuard } from '../common/ssrf-guard';
 import { Scan, ScanProfile, SCAN_QUEUE } from './scans.types';
 
@@ -15,6 +17,8 @@ export class ScansService {
     @InjectQueue(SCAN_QUEUE) private readonly queue: Queue,
     private readonly domains: DomainsService,
     private readonly plans: PlansService,
+    private readonly audit: AuditService,
+    private readonly analytics: AnalyticsService,
   ) {}
 
   async createScan(
@@ -47,7 +51,23 @@ export class ScansService {
 
     const scan = rows[0];
 
-    // 5. Enqueue job
+    // 5. Increment org scan usage counter
+    await this.db.query(
+      `UPDATE orgs SET scans_used = scans_used + 1 WHERE id = $1`,
+      [orgId],
+    );
+
+    // 6. Audit log + analytics
+    await this.audit.log({
+      orgId,
+      userId,
+      action: 'scan.created',
+      target: normalizedUrl.toString(),
+      metadata: { scanId: scan.id, scanProfile },
+    });
+    this.analytics.track(userId, 'scan.created', { scanId: scan.id, scanProfile, targetHost });
+
+    // 7. Enqueue job
     await this.queue.add(
       'run-scan',
       { scanId: scan.id, targetUrl: scan.targetUrl, scanProfile },

@@ -2,7 +2,6 @@ import { Pool } from 'pg';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as os from 'os';
-import { v4 as uuidv4 } from 'uuid';
 import { DockerRunner } from './docker-runner';
 import { HttpxScanner } from '../scanners/httpx';
 import { NucleiScanner } from '../scanners/nuclei';

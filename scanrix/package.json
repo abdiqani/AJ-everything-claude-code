@@ -14,7 +14,8 @@
     "test": "npm run test --workspaces",
     "db:migrate": "npm run migrate --workspace=packages/api",
     "docker:up": "docker compose -f docker-compose.yml up -d",
-    "docker:down": "docker compose -f docker-compose.yml down"
+    "docker:down": "docker compose -f docker-compose.yml down",
+    "test:e2e": "cd e2e && npx playwright test"
   },
   "devDependencies": {
     "concurrently": "^8.2.2",

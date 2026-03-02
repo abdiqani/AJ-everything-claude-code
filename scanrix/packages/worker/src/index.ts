@@ -1,4 +1,4 @@
-import Queue from 'bull';
+import * as Bull from 'bull';
 import { Pool } from 'pg';
 import { ScanOrchestrator } from './runner/orchestrator';
 import { S3StorageAdapter } from './storage/s3.adapter';
@@ -16,7 +16,7 @@ const storage = new S3StorageAdapter({
   forcePathStyle: process.env.STORAGE_PROVIDER === 'minio',
 });
 
-const queue = new Queue(SCAN_QUEUE, {
+const queue = new Bull(SCAN_QUEUE, {
   redis: {
     host: process.env.REDIS_HOST || 'localhost',
     port: parseInt(process.env.REDIS_PORT || '6379', 10),

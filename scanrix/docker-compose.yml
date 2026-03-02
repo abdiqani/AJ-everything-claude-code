@@ -126,6 +126,12 @@ services:
       STORAGE_SECRET_ACCESS_KEY:     ${MINIO_ROOT_PASSWORD:-minioadmin123}
       STORAGE_BUCKET:                ${STORAGE_BUCKET:-scanrix-artifacts}
       FRONTEND_URL:                  http://localhost:3000
+      STRIPE_SECRET_KEY:             ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET:         ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_PRICE_STARTER:          ${STRIPE_PRICE_STARTER:-}
+      STRIPE_PRICE_PRO:              ${STRIPE_PRICE_PRO:-}
+      POSTHOG_API_KEY:               ${POSTHOG_API_KEY:-}
+      POSTHOG_HOST:                  ${POSTHOG_HOST:-https://app.posthog.com}
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.api.rule=Host(`localhost`) && PathPrefix(`/api`)"
@@ -170,6 +176,8 @@ services:
       NEXT_PUBLIC_API_URL:            http://localhost:4000
       NEXT_PUBLIC_SUPABASE_URL:       ${SUPABASE_URL}
       NEXT_PUBLIC_SUPABASE_ANON_KEY:  ${SUPABASE_ANON_KEY}
+      NEXT_PUBLIC_POSTHOG_API_KEY:    ${POSTHOG_API_KEY:-}
+      NEXT_PUBLIC_POSTHOG_HOST:       ${POSTHOG_HOST:-https://app.posthog.com}
     ports:
       - "3000:3000"
     depends_on:
