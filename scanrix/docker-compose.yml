@@ -1,0 +1,192 @@
+version: '3.9'
+
+# ══════════════════════════════════════════════════════════════════════
+# Scanrix – Docker Compose (local development)
+# ══════════════════════════════════════════════════════════════════════
+#
+# Services:
+#   postgres  – PostgreSQL (or use Supabase cloud; set DATABASE_URL)
+#   redis     – Redis (BullMQ queue backend)
+#   minio     – S3-compatible object storage (local dev)
+#   api       – NestJS backend API
+#   worker    – Scanner orchestration worker
+#   web       – Next.js frontend
+#   traefik   – Reverse proxy / routing
+#
+# ══════════════════════════════════════════════════════════════════════
+
+networks:
+  scanrix-net:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
+
+services:
+
+  # ── PostgreSQL ────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    networks: [scanrix-net]
+    environment:
+      POSTGRES_DB:       scanrix
+      POSTGRES_USER:     scanrix
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/db/migrations:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scanrix"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ─────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks: [scanrix-net]
+    command: redis-server --requirepass ${REDIS_PASSWORD:-changeme}
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-changeme}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── MinIO ─────────────────────────────────────────────────────────────
+  minio:
+    image: minio/minio:RELEASE.2024-01-13T07-53-03Z
+    restart: unless-stopped
+    networks: [scanrix-net]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER:     ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+    volumes:
+      - minio-data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── MinIO bucket provisioning ─────────────────────────────────────────
+  minio-init:
+    image: minio/mc:latest
+    networks: [scanrix-net]
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin123};
+      mc mb --ignore-existing local/${STORAGE_BUCKET:-scanrix-artifacts};
+      mc anonymous set none local/${STORAGE_BUCKET:-scanrix-artifacts};
+      exit 0;
+      "
+
+  # ── API (NestJS) ──────────────────────────────────────────────────────
+  api:
+    build:
+      context: ./packages/api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    networks: [scanrix-net]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      PORT:                          4000
+      DATABASE_URL:                  postgresql://scanrix:${POSTGRES_PASSWORD:-changeme}@postgres:5432/scanrix
+      REDIS_HOST:                    redis
+      REDIS_PORT:                    6379
+      REDIS_PASSWORD:                ${REDIS_PASSWORD:-changeme}
+      SUPABASE_URL:                  ${SUPABASE_URL}
+      SUPABASE_SERVICE_ROLE_KEY:     ${SUPABASE_SERVICE_ROLE_KEY}
+      STORAGE_PROVIDER:              minio
+      STORAGE_ENDPOINT:              http://minio:9000
+      STORAGE_REGION:                us-east-1
+      STORAGE_ACCESS_KEY_ID:         ${MINIO_ROOT_USER:-minioadmin}
+      STORAGE_SECRET_ACCESS_KEY:     ${MINIO_ROOT_PASSWORD:-minioadmin123}
+      STORAGE_BUCKET:                ${STORAGE_BUCKET:-scanrix-artifacts}
+      FRONTEND_URL:                  http://localhost:3000
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=Host(`localhost`) && PathPrefix(`/api`)"
+      - "traefik.http.services.api.loadbalancer.server.port=4000"
+
+  # ── Worker ────────────────────────────────────────────────────────────
+  worker:
+    build:
+      context: ./packages/worker
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    networks: [scanrix-net]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      # Give worker access to Docker socket (required to launch scanner containers)
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      DATABASE_URL:              postgresql://scanrix:${POSTGRES_PASSWORD:-changeme}@postgres:5432/scanrix
+      REDIS_HOST:                redis
+      REDIS_PORT:                6379
+      REDIS_PASSWORD:            ${REDIS_PASSWORD:-changeme}
+      STORAGE_PROVIDER:          minio
+      STORAGE_ENDPOINT:          http://minio:9000
+      STORAGE_REGION:            us-east-1
+      STORAGE_ACCESS_KEY_ID:     ${MINIO_ROOT_USER:-minioadmin}
+      STORAGE_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+      STORAGE_BUCKET:            ${STORAGE_BUCKET:-scanrix-artifacts}
+      WORKER_CONCURRENCY:        2
+
+  # ── Frontend (Next.js) ────────────────────────────────────────────────
+  web:
+    build:
+      context: ./packages/web
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    networks: [scanrix-net]
+    environment:
+      NEXT_PUBLIC_API_URL:            http://localhost:4000
+      NEXT_PUBLIC_SUPABASE_URL:       ${SUPABASE_URL}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY:  ${SUPABASE_ANON_KEY}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+  # ── Traefik reverse proxy ─────────────────────────────────────────────
+  traefik:
+    image: traefik:v3.0
+    restart: unless-stopped
+    networks: [scanrix-net]
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+    ports:
+      - "80:80"
+      - "8080:8080"   # Traefik dashboard
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
