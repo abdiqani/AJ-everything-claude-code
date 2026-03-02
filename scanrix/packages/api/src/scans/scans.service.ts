@@ -3,6 +3,8 @@ import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { Pool } from 'pg';
 import { DATABASE_POOL } from '../common/database.module';
+import { STORAGE_ADAPTER } from '../storage/storage.module';
+import { StorageAdapter } from '../storage/storage.adapter';
 import { DomainsService } from '../domains/domains.service';
 import { PlansService } from '../plans/plans.service';
 import { AuditService } from '../common/audit.service';
@@ -19,6 +21,7 @@ export class ScansService {
     private readonly plans: PlansService,
     private readonly audit: AuditService,
     private readonly analytics: AnalyticsService,
+    @Inject(STORAGE_ADAPTER) private readonly storage: StorageAdapter,
   ) {}
 
   async createScan(
@@ -108,5 +111,40 @@ export class ScansService {
     );
     if (!rows[0]) throw new NotFoundException('Scan not found');
     return rows[0];
+  }
+
+  async listArtifacts(
+    orgId: string,
+    scanId: string,
+  ): Promise<Array<{ tool: string; artifactKey: string; contentType: string; sizeBytes: number; createdAt: Date }>> {
+    const { rows } = await this.db.query(
+      `SELECT sa.tool, sa.artifact_key AS "artifactKey",
+              sa.content_type AS "contentType", sa.size_bytes AS "sizeBytes",
+              sa.created_at AS "createdAt"
+       FROM scan_artifacts sa
+       JOIN scans s ON s.id = sa.scan_id
+       WHERE s.org_id = $1 AND sa.scan_id = $2
+       ORDER BY sa.created_at ASC`,
+      [orgId, scanId],
+    );
+    return rows;
+  }
+
+  async getArtifactDownloadUrl(
+    orgId: string,
+    scanId: string,
+    artifactKey: string,
+  ): Promise<{ url: string; expiresIn: number }> {
+    const { rows } = await this.db.query(
+      `SELECT sa.artifact_key
+       FROM scan_artifacts sa
+       JOIN scans s ON s.id = sa.scan_id
+       WHERE s.org_id = $1 AND sa.scan_id = $2 AND sa.artifact_key = $3`,
+      [orgId, scanId, artifactKey],
+    );
+    if (!rows[0]) throw new NotFoundException('Artifact not found');
+
+    const url = await this.storage.getSignedUrl(artifactKey, 3600);
+    return { url, expiresIn: 3600 };
   }
 }

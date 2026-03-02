@@ -78,4 +78,45 @@ export class AdminService {
     await this.audit.log({ userId, action: 'user.blocked', metadata: { unblocked: true } });
     return { unblocked: true };
   }
+
+  async blockDomain(domain: string, reason?: string, adminUserId?: string) {
+    const normalized = domain.toLowerCase().replace(/^www\./, '');
+    await this.db.query(
+      `INSERT INTO domain_blocklist (domain, reason, blocked_by)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (domain) DO UPDATE SET reason = EXCLUDED.reason`,
+      [normalized, reason ?? null, adminUserId ?? null],
+    );
+    await this.audit.log({
+      userId: adminUserId,
+      action: 'domain.blocked',
+      target: normalized,
+      metadata: { reason },
+    });
+    return { blocked: true, domain: normalized };
+  }
+
+  async unblockDomain(domain: string, adminUserId?: string) {
+    const normalized = domain.toLowerCase().replace(/^www\./, '');
+    await this.db.query(
+      'DELETE FROM domain_blocklist WHERE domain = $1',
+      [normalized],
+    );
+    await this.audit.log({
+      userId: adminUserId,
+      action: 'domain.unblocked',
+      target: normalized,
+    });
+    return { unblocked: true, domain: normalized };
+  }
+
+  async getBlockedDomains(limit = 100) {
+    const { rows } = await this.db.query(
+      `SELECT id, domain, reason, blocked_by AS "blockedBy", created_at AS "createdAt"
+       FROM domain_blocklist
+       ORDER BY created_at DESC LIMIT $1`,
+      [limit],
+    );
+    return rows;
+  }
 }

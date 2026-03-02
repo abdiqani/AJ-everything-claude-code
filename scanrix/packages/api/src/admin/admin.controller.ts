@@ -2,9 +2,11 @@ import {
   Controller,
   Get,
   Post,
+  Delete,
   Param,
   Query,
   Body,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
@@ -14,6 +16,15 @@ import { AdminGuard } from './admin.guard';
 import { AdminService } from './admin.service';
 
 class BlockUserDto {
+  @IsString()
+  @IsOptional()
+  reason?: string;
+}
+
+class BlockDomainDto {
+  @IsString()
+  domain!: string;
+
   @IsString()
   @IsOptional()
   reason?: string;
@@ -63,5 +74,23 @@ export class AdminController {
   @ApiOperation({ summary: 'Unblock a previously blocked user' })
   unblockUser(@Param('userId') userId: string) {
     return this.admin.unblockUser(userId);
+  }
+
+  @Get('domains/blocklist')
+  @ApiOperation({ summary: 'List all blocked domains' })
+  getBlockedDomains(@Query('limit') limit = 100) {
+    return this.admin.getBlockedDomains(+limit);
+  }
+
+  @Post('domains/block')
+  @ApiOperation({ summary: 'Add a domain to the global blocklist' })
+  blockDomain(@Req() req: { user: any }, @Body() dto: BlockDomainDto) {
+    return this.admin.blockDomain(dto.domain, dto.reason, req.user?.id);
+  }
+
+  @Delete('domains/:domain/block')
+  @ApiOperation({ summary: 'Remove a domain from the blocklist' })
+  unblockDomain(@Req() req: { user: any }, @Param('domain') domain: string) {
+    return this.admin.unblockDomain(domain, req.user?.id);
   }
 }

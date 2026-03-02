@@ -31,6 +31,12 @@ export const api = {
       apiFetch(`/scans/${scanId}/findings`, token),
     report: (token: string, scanId: string) =>
       apiFetch(`/scans/${scanId}/report`, token),
+    artifacts: (token: string, scanId: string) =>
+      apiFetch(`/scans/${scanId}/artifacts`, token),
+    artifactDownload: (token: string, scanId: string, key: string) =>
+      apiFetch<{ url: string }>(`/scans/${scanId}/artifacts/download?key=${encodeURIComponent(key)}`, token),
+    reportDownload: (token: string, scanId: string, format: 'html' | 'json') =>
+      apiFetch<{ url: string }>(`/scans/${scanId}/report/download?format=${format}`, token),
   },
   domains: {
     list: (token: string) => apiFetch('/domains', token),

@@ -28,6 +28,9 @@ export default function ScanDetailPage() {
   const [token, setToken] = useState('');
   const [plan, setPlan] = useState('free');
   const [loading, setLoading] = useState(true);
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+  const [downloading, setDownloading] = useState<string | null>(null);
+  const [artifacts, setArtifacts] = useState<any[]>([]);
 
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data }) => {
@@ -35,18 +38,56 @@ export default function ScanDetailPage() {
       setToken(t);
       if (!t) return;
 
-      const [s, f, r] = await Promise.allSettled([
+      const { data: profile } = await supabase
+        .from('user_profiles')
+        .select('role, orgs(plan)')
+        .single();
+      if (profile) setPlan((profile as any).orgs?.plan ?? 'free');
+
+      const [s, f, r, a] = await Promise.allSettled([
         api.scans.get(t, id),
         api.scans.findings(t, id),
         api.scans.report(t, id),
+        api.scans.artifacts(t, id),
       ]);
 
       if (s.status === 'fulfilled') setScan(s.value as Scan);
       if (f.status === 'fulfilled') setFindings(f.value as Finding[]);
       if (r.status === 'fulfilled') setReport(r.value);
+      if (a.status === 'fulfilled') setArtifacts(a.value as any[]);
       setLoading(false);
     });
   }, [id]);
+
+  async function downloadReport(format: 'html' | 'json') {
+    setDownloading(format);
+    try {
+      const res = await api.scans.reportDownload(token, id, format) as { url: string };
+      window.open(res.url, '_blank');
+    } finally {
+      setDownloading(null);
+    }
+  }
+
+  async function downloadArtifact(key: string) {
+    setDownloading(key);
+    try {
+      const res = await api.scans.artifactDownload(token, id, key) as { url: string };
+      window.open(res.url, '_blank');
+    } finally {
+      setDownloading(null);
+    }
+  }
+
+  function toggleRow(findingId: string) {
+    setExpandedRows(prev => {
+      const next = new Set(prev);
+      next.has(findingId) ? next.delete(findingId) : next.add(findingId);
+      return next;
+    });
+  }
+
+  const isPaid = plan !== 'free';
 
   if (loading) return <p>Loading…</p>;
   if (!scan) return <p>Scan not found.</p>;
@@ -83,6 +124,48 @@ export default function ScanDetailPage() {
         </div>
       )}
 
+      {scan.status === 'COMPLETED' && (
+        <div style={{ ...card, marginTop: '1.5rem' }}>
+          <h2 style={{ fontSize: '1rem', margin: '0 0 1rem' }}>Downloads</h2>
+          {isPaid ? (
+            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+              <button onClick={() => downloadReport('html')} disabled={downloading === 'html'} style={dlBtn}>
+                {downloading === 'html' ? 'Downloading…' : 'Download HTML Report'}
+              </button>
+              <button onClick={() => downloadReport('json')} disabled={downloading === 'json'} style={dlBtn}>
+                {downloading === 'json' ? 'Downloading…' : 'Download JSON Report'}
+              </button>
+            </div>
+          ) : (
+            <p style={{ margin: 0, color: '#6b7280', fontSize: '0.875rem' }}>
+              <Link href="/dashboard/upgrade" style={{ color: '#2563eb' }}>Upgrade</Link> to download reports.
+            </p>
+          )}
+        </div>
+      )}
+
+      {scan.status === 'COMPLETED' && artifacts.length > 0 && (
+        <div style={{ ...card, marginTop: '1.5rem' }}>
+          <h2 style={{ fontSize: '1rem', margin: '0 0 1rem' }}>Artifacts</h2>
+          {isPaid ? (
+            <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              {artifacts.map((a: any) => (
+                <li key={a.key} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.875rem' }}>
+                  <span style={{ fontFamily: 'monospace', flex: 1, wordBreak: 'break-all' }}>{a.key}</span>
+                  <button onClick={() => downloadArtifact(a.key)} disabled={downloading === a.key} style={dlBtn}>
+                    {downloading === a.key ? '…' : 'Download'}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p style={{ margin: 0, color: '#6b7280', fontSize: '0.875rem' }}>
+              <Link href="/dashboard/upgrade" style={{ color: '#2563eb' }}>Upgrade</Link> to access raw artifacts.
+            </p>
+          )}
+        </div>
+      )}
+
       <div style={{ ...card, marginTop: '1.5rem', padding: 0, overflow: 'hidden' }}>
         <div style={{ padding: '1rem 1.5rem', borderBottom: '1px solid #e5e7eb', fontWeight: 600 }}>
           Findings ({findings.length})
@@ -95,31 +178,19 @@ export default function ScanDetailPage() {
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
           <thead>
             <tr style={{ background: '#f3f4f6' }}>
-              {['Severity', 'Tool', 'Title', 'Category', 'CVE/CWE', 'Target URL'].map(h => (
+              {['', 'Severity', 'Tool', 'Title', 'Category', 'CVE/CWE', 'Target URL'].map(h => (
                 <th key={h} style={{ textAlign: 'left', padding: '0.625rem 1rem', borderBottom: '1px solid #e5e7eb', fontWeight: 600 }}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {findings.length === 0 && (
-              <tr><td colSpan={6} style={{ padding: '2rem', textAlign: 'center', color: '#9ca3af' }}>
+              <tr><td colSpan={7} style={{ padding: '2rem', textAlign: 'center', color: '#9ca3af' }}>
                 {scan.status === 'RUNNING' || scan.status === 'QUEUED' ? 'Scan in progress…' : 'No findings.'}
               </td></tr>
             )}
             {findings.map(f => (
-              <tr key={f.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
-                <td style={tdStyle}>
-                  <span style={{ color: SEV_COLOR[f.severity] ?? '#111', fontWeight: 600, textTransform: 'uppercase', fontSize: '0.75rem' }}>{f.severity}</span>
-                </td>
-                <td style={tdStyle}>{f.tool}</td>
-                <td style={tdStyle}>{f.title}</td>
-                <td style={tdStyle}>{f.category ?? '—'}</td>
-                <td style={tdStyle}>
-                  {f.cve ? <a href={`https://nvd.nist.gov/vuln/detail/${f.cve}`} target="_blank" rel="noreferrer" style={{ color: '#2563eb' }}>{f.cve}</a>
-                    : f.cwe ?? '—'}
-                </td>
-                <td style={{ ...tdStyle, fontFamily: 'monospace', fontSize: '0.75rem', wordBreak: 'break-all' }}>{f.targetUrl}</td>
-              </tr>
+              <FindingRow key={f.id} finding={f} isPaid={isPaid} expanded={expandedRows.has(f.id)} onToggle={() => toggleRow(f.id)} />
             ))}
           </tbody>
         </table>
@@ -137,6 +208,74 @@ function InfoRow({ label, value, mono }: { label: string; value: string; mono?: 
   );
 }
 
+function FindingRow({ finding: f, isPaid, expanded, onToggle }: {
+  finding: Finding; isPaid: boolean; expanded: boolean; onToggle: () => void;
+}) {
+  return (
+    <>
+      <tr style={{ borderBottom: expanded ? 'none' : '1px solid #f3f4f6' }}>
+        <td style={{ ...tdStyle, width: '2rem' }}>
+          {isPaid ? (
+            <button onClick={onToggle} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', fontSize: '0.875rem', padding: 0 }}>
+              {expanded ? '▲' : '▼'}
+            </button>
+          ) : (
+            <Link href="/dashboard/upgrade" style={{ fontSize: '0.7rem', color: '#6b7280', whiteSpace: 'nowrap' }}>Upgrade →</Link>
+          )}
+        </td>
+        <td style={tdStyle}>
+          <span style={{ color: SEV_COLOR[f.severity] ?? '#111', fontWeight: 600, textTransform: 'uppercase', fontSize: '0.75rem' }}>{f.severity}</span>
+        </td>
+        <td style={tdStyle}>{f.tool}</td>
+        <td style={tdStyle}>{f.title}</td>
+        <td style={tdStyle}>{f.category ?? '—'}</td>
+        <td style={tdStyle}>
+          {f.cve ? <a href={`https://nvd.nist.gov/vuln/detail/${f.cve}`} target="_blank" rel="noreferrer" style={{ color: '#2563eb' }}>{f.cve}</a>
+            : f.cwe ?? '—'}
+        </td>
+        <td style={{ ...tdStyle, fontFamily: 'monospace', fontSize: '0.75rem', wordBreak: 'break-all' }}>{f.targetUrl}</td>
+      </tr>
+      {expanded && isPaid && (
+        <tr style={{ borderBottom: '1px solid #f3f4f6' }}>
+          <td colSpan={7} style={{ padding: '1rem 1.5rem', background: '#f9fafb' }}>
+            {f.evidence && (
+              <div style={{ marginBottom: '0.75rem' }}>
+                <div style={{ fontWeight: 600, fontSize: '0.75rem', marginBottom: '0.25rem', color: '#374151' }}>Evidence</div>
+                <pre style={{ margin: 0, padding: '0.75rem', background: '#f3f4f6', borderRadius: 6, fontSize: '0.75rem', overflowX: 'auto', whiteSpace: 'pre-wrap' }}>
+                  {JSON.stringify(f.evidence, null, 2)}
+                </pre>
+              </div>
+            )}
+            {f.recommendation && (
+              <div style={{ marginBottom: '0.75rem' }}>
+                <div style={{ fontWeight: 600, fontSize: '0.75rem', marginBottom: '0.25rem', color: '#374151' }}>Recommendation</div>
+                <p style={{ margin: 0, fontSize: '0.875rem', color: '#374151' }}>{f.recommendation}</p>
+              </div>
+            )}
+            {(f.evidence?.request || f.evidence?.response) && (
+              <div>
+                {f.evidence?.request && (
+                  <div style={{ marginBottom: '0.5rem' }}>
+                    <div style={{ fontWeight: 600, fontSize: '0.75rem', marginBottom: '0.25rem', color: '#374151' }}>Request</div>
+                    <pre style={{ margin: 0, padding: '0.75rem', background: '#f3f4f6', borderRadius: 6, fontSize: '0.75rem', overflowX: 'auto', whiteSpace: 'pre-wrap' }}>{f.evidence.request}</pre>
+                  </div>
+                )}
+                {f.evidence?.response && (
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: '0.75rem', marginBottom: '0.25rem', color: '#374151' }}>Response</div>
+                    <pre style={{ margin: 0, padding: '0.75rem', background: '#f3f4f6', borderRadius: 6, fontSize: '0.75rem', overflowX: 'auto', whiteSpace: 'pre-wrap' }}>{f.evidence.response}</pre>
+                  </div>
+                )}
+              </div>
+            )}
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
 const card: React.CSSProperties = { background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, padding: '1.5rem' };
 const grid: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '1rem' };
 const tdStyle: React.CSSProperties = { padding: '0.625rem 1rem' };
+const dlBtn: React.CSSProperties = { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, padding: '0.4rem 0.9rem', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600 };
