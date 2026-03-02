@@ -24,6 +24,6 @@ export class ReportsController {
     @Param('scanId') scanId: string,
     @Query('format') format: 'html' | 'json' = 'html',
   ) {
-    return this.reports.getDownloadUrl(req.user.orgId, scanId, format);
+    return this.reports.getDownloadUrl(req.user.orgId, scanId, format, req.user.plan);
   }
 }

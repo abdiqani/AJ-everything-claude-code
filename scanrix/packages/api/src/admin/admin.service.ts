@@ -11,9 +11,20 @@ export class AdminService {
   ) {}
 
   async listAllScans(limit: number, offset: number, status?: string) {
-    const params: unknown[] = [limit, offset];
-    const where = status ? `WHERE s.status = $3` : '';
-    if (status) params.push(status);
+    // Build conditions with positional parameters — no string interpolation of user data
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+
+    if (status) {
+      conditions.push(`s.status = $${params.length + 1}`);
+      params.push(status);
+    }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    // limit and offset always come last so their indices are stable
+    params.push(limit, offset);
+    const limitIdx = params.length - 1;
+    const offsetIdx = params.length;
 
     const { rows } = await this.db.query(
       `SELECT s.id, s.target_url AS "targetUrl", s.scan_profile AS "scanProfile",
@@ -23,7 +34,7 @@ export class AdminService {
        JOIN orgs o ON o.id = s.org_id
        JOIN user_profiles up ON up.id = s.created_by
        ${where}
-       ORDER BY s.created_at DESC LIMIT $1 OFFSET $2`,
+       ORDER BY s.created_at DESC LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
       params,
     );
     return rows;
@@ -57,7 +68,13 @@ export class AdminService {
   }
 
   async blockUser(userId: string, reason?: string) {
-    // Cancel any QUEUED scans for this user
+    // Set blocked_at on the user profile — AuthGuard will reject future requests
+    await this.db.query(
+      `UPDATE user_profiles SET blocked_at = NOW(), blocked_reason = $2 WHERE id = $1`,
+      [userId, reason ?? null],
+    );
+
+    // Cancel any active scans
     const { rows } = await this.db.query(
       `UPDATE scans SET status = 'CANCELLED'
        WHERE created_by = $1 AND status IN ('QUEUED','RUNNING')
@@ -75,7 +92,11 @@ export class AdminService {
   }
 
   async unblockUser(userId: string) {
-    await this.audit.log({ userId, action: 'user.blocked', metadata: { unblocked: true } });
+    await this.db.query(
+      `UPDATE user_profiles SET blocked_at = NULL, blocked_reason = NULL WHERE id = $1`,
+      [userId],
+    );
+    await this.audit.log({ userId, action: 'user.unblocked' });
     return { unblocked: true };
   }
 

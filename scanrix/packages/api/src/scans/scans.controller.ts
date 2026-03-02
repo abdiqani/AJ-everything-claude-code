@@ -32,7 +32,7 @@ export class ScansController {
   constructor(private readonly scans: ScansService) {}
 
   @Post()
-  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Throttle({ global: { limit: 10, ttl: 60_000 } })
   @ApiOperation({ summary: 'Submit a new scan request' })
   create(@Req() req: { user: AuthUser }, @Body() dto: CreateScanDto) {
     return this.scans.createScan(
@@ -69,13 +69,13 @@ export class ScansController {
   }
 
   @Get(':id/artifacts/download')
-  @ApiOperation({ summary: 'Get a pre-signed download URL for a scan artifact' })
+  @ApiOperation({ summary: 'Get a pre-signed download URL for a scan artifact (paid plans only)' })
   @ApiQuery({ name: 'key', required: true, type: String, description: 'Artifact storage key' })
   getArtifactDownloadUrl(
     @Req() req: { user: AuthUser },
     @Param('id') id: string,
     @Query('key') key: string,
   ) {
-    return this.scans.getArtifactDownloadUrl(req.user.orgId, id, key);
+    return this.scans.getArtifactDownloadUrl(req.user.orgId, id, key, req.user.plan);
   }
 }

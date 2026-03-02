@@ -38,11 +38,15 @@ export default function ScanDetailPage() {
       setToken(t);
       if (!t) return;
 
-      const { data: profile } = await supabase
-        .from('user_profiles')
-        .select('role, orgs(plan)')
-        .single();
-      if (profile) setPlan((profile as any).orgs?.plan ?? 'free');
+      const userId = data.session?.user?.id;
+      if (userId) {
+        const { data: profile } = await supabase
+          .from('user_profiles')
+          .select('role, orgs(plan)')
+          .eq('id', userId)
+          .single();
+        if (profile) setPlan((profile as any).orgs?.plan ?? 'free');
+      }
 
       const [s, f, r, a] = await Promise.allSettled([
         api.scans.get(t, id),

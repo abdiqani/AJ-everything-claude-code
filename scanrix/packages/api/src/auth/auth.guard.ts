@@ -1,6 +1,7 @@
 import {
   CanActivate,
   ExecutionContext,
+  ForbiddenException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -36,15 +37,19 @@ export class AuthGuard implements CanActivate {
       throw new UnauthorizedException('Invalid or expired token');
     }
 
-    // Fetch org context + user role
+    // Fetch org context + user role + block status
     const { data: profile } = await this.supabase
       .from('user_profiles')
-      .select('org_id, role, orgs(plan)')
+      .select('org_id, role, blocked_at, orgs(plan)')
       .eq('id', data.user.id)
       .single();
 
     if (!profile) {
       throw new UnauthorizedException('User profile not found');
+    }
+
+    if ((profile as any).blocked_at) {
+      throw new ForbiddenException('Your account has been suspended. Contact support.');
     }
 
     req.user = {

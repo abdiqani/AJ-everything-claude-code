@@ -10,7 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
-import { IsString, IsOptional } from 'class-validator';
+import { IsString, IsOptional, Matches, MaxLength } from 'class-validator';
 import { SkipThrottle } from '@nestjs/throttler';
 import { AdminGuard } from './admin.guard';
 import { AdminService } from './admin.service';
@@ -23,11 +23,20 @@ class BlockUserDto {
 
 class BlockDomainDto {
   @IsString()
+  @MaxLength(253)
+  @Matches(/^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/, { message: 'domain must be a valid hostname' })
   domain!: string;
 
   @IsString()
   @IsOptional()
   reason?: string;
+}
+
+class UnblockDomainParamDto {
+  @IsString()
+  @MaxLength(253)
+  @Matches(/^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/, { message: 'domain must be a valid hostname' })
+  domain!: string;
 }
 
 @ApiTags('admin')
@@ -90,7 +99,7 @@ export class AdminController {
 
   @Delete('domains/:domain/block')
   @ApiOperation({ summary: 'Remove a domain from the blocklist' })
-  unblockDomain(@Req() req: { user: any }, @Param('domain') domain: string) {
-    return this.admin.unblockDomain(domain, req.user?.id);
+  unblockDomain(@Req() req: { user: any }, @Param() params: UnblockDomainParamDto) {
+    return this.admin.unblockDomain(params.domain, req.user?.id);
   }
 }

@@ -1,4 +1,4 @@
-import { Injectable, Inject, NotFoundException } from '@nestjs/common';
+import { Injectable, Inject, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { Pool } from 'pg';
 import { DATABASE_POOL } from '../common/database.module';
 import { STORAGE_ADAPTER } from '../storage/storage.module';
@@ -28,7 +28,11 @@ export class ReportsService {
     orgId: string,
     scanId: string,
     format: 'html' | 'json',
+    plan: string,
   ): Promise<{ url: string; format: 'html' | 'json'; expiresIn: number }> {
+    if (plan === 'free') {
+      throw new ForbiddenException('Report downloads require a paid plan. Upgrade at /dashboard/upgrade');
+    }
     const { rows } = await this.db.query(
       `SELECT r.html_key AS "htmlKey", r.json_key AS "jsonKey"
        FROM reports r

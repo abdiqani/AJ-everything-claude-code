@@ -1,4 +1,4 @@
-import { Injectable, Inject, NotFoundException } from '@nestjs/common';
+import { Injectable, Inject, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { Pool } from 'pg';
@@ -31,44 +31,61 @@ export class ScansService {
     targetUrl: string,
     scanProfile: ScanProfile,
   ): Promise<Scan> {
-    // 1. SSRF protection + URL normalization
+    // 1. SSRF protection + URL normalization (before transaction — no DB needed)
     const normalizedUrl = await SsrfGuard.validate(targetUrl);
     const targetHost = normalizedUrl.hostname;
 
-    // 2. Domain ownership verification
+    // 2. Domain ownership verification (read-only, safe outside transaction)
     await this.domains.assertDomainVerified(orgId, targetHost);
 
-    // 3. Plan checks
-    await this.plans.assertScanAllowed(orgId, plan, scanProfile);
+    // 3–5. Quota check + scan insert + counter increment in a single serializable
+    //      transaction, protected by a per-org advisory lock to prevent TOCTOU races.
+    const client = await this.db.connect();
+    let scan: Scan;
+    try {
+      await client.query('BEGIN');
+      // Advisory lock keyed on org hash — serializes concurrent requests for the same org
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [orgId]);
 
-    // 4. Create scan record
-    const { rows } = await this.db.query<Scan>(
-      `INSERT INTO scans (org_id, created_by, target_url, target_host, scan_profile)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, org_id AS "orgId", created_by AS "createdBy",
-                 target_url AS "targetUrl", target_host AS "targetHost",
-                 scan_profile AS "scanProfile", status,
-                 created_at AS "createdAt"`,
-      [orgId, userId, normalizedUrl.toString(), targetHost, scanProfile],
-    );
+      // Re-check quota inside the lock
+      await this.plans.assertScanAllowed(orgId, plan, scanProfile);
 
-    const scan = rows[0];
+      const { rows } = await client.query<Scan>(
+        `INSERT INTO scans (org_id, created_by, target_url, target_host, scan_profile)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING id, org_id AS "orgId", created_by AS "createdBy",
+                   target_url AS "targetUrl", target_host AS "targetHost",
+                   scan_profile AS "scanProfile", status,
+                   created_at AS "createdAt"`,
+        [orgId, userId, normalizedUrl.toString(), targetHost, scanProfile],
+      );
+      scan = rows[0];
 
-    // 5. Increment org scan usage counter
-    await this.db.query(
-      `UPDATE orgs SET scans_used = scans_used + 1 WHERE id = $1`,
-      [orgId],
-    );
+      await client.query(
+        `UPDATE orgs SET scans_used = scans_used + 1 WHERE id = $1`,
+        [orgId],
+      );
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
 
-    // 6. Audit log + analytics
-    await this.audit.log({
-      orgId,
-      userId,
-      action: 'scan.created',
-      target: normalizedUrl.toString(),
-      metadata: { scanId: scan.id, scanProfile },
-    });
-    this.analytics.track(userId, 'scan.created', { scanId: scan.id, scanProfile, targetHost });
+    // 6. Audit log + analytics (fire-and-forget, outside transaction)
+    try {
+      await this.audit.log({
+        orgId,
+        userId,
+        action: 'scan.created',
+        target: normalizedUrl.toString(),
+        metadata: { scanId: scan.id, scanProfile },
+      });
+    } catch { /* best-effort */ }
+    try {
+      this.analytics.track(userId, 'scan.created', { scanId: scan.id, scanProfile, targetHost });
+    } catch { /* best-effort */ }
 
     // 7. Enqueue job
     await this.queue.add(
@@ -134,7 +151,12 @@ export class ScansService {
     orgId: string,
     scanId: string,
     artifactKey: string,
+    plan: string,
   ): Promise<{ url: string; expiresIn: number }> {
+    if (plan === 'free') {
+      throw new ForbiddenException('Artifact downloads require a paid plan. Upgrade at /dashboard/upgrade');
+    }
+
     const { rows } = await this.db.query(
       `SELECT sa.artifact_key
        FROM scan_artifacts sa
